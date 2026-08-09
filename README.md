@@ -17,7 +17,7 @@
 
 ## Overview
 
-**AI Factory** is a comprehensive pipeline for fine-tuning, evaluating, and optimizing large language models (LLMs) using advanced techniques like QLoRA (4-bit quantization) and Direct Preference Optimization (DPO). The system is designed for efficient training on consumer GPUs (e.g., RTX 4070 with 8GB VRAM) and supports the complete workflow from data generation to model deployment.
+**AI Factory** is a comprehensive pipeline for fine-tuning, evaluating, and optimizing large language models (LLMs) using advanced techniques like QLoRA (4-bit quantization) and Direct Preference Optimization (DPO). The system is designed for efficient training on consumer NVIDIA GPUs, with conservative 8 GB and 12 GB Docker profiles, and supports the complete workflow from data generation to model deployment.
 
 ### Key Features
 
@@ -48,6 +48,8 @@ ai-factory/
 │   ├── main.py                 # Main CLI entry point
 │   ├── config.py              # Configuration schema (Pydantic)
 │   ├── config.yaml            # Default configuration file
+│   ├── config.8gb-safe.yaml   # Conservative 4B / 8 GB Docker profile
+│   ├── config.12gb-safe.yaml  # Conservative 9B / 12 GB Docker profile
 │   ├── train.py               # QLoRA training and model merging
 │   ├── model_optimizer.py     # Hardware-aware config recommendation
 │   ├── dpo.py                 # DPO training and preference generation
@@ -63,9 +65,14 @@ ai-factory/
 │   │   └── ...
 │   └── upload/
 │       └── upload_to_hf.py    # Hugging Face model upload
+├── docker/                    # Dependencies, host check, runtime verification
 ├── tests/                     # Test suite
-├── data/                      # Training/validation data (JSONL)
-└── requirements.txt           # Python dependencies
+├── agent_data/                # Persistent, restricted inference-tool files
+├── training_output/           # Host-visible Docker training artifacts
+├── Dockerfile                 # PyTorch 2.5.1 / CUDA 12.4 image
+├── compose.yaml               # Docker Desktop GPU and persistent storage
+├── environment.yml            # Canonical Conda environment
+└── requirements.txt           # Exported native Windows environment
 ```
 
 ### Pipeline Flow
@@ -83,9 +90,169 @@ ai-factory/
 ### Prerequisites
 
 - **Python**: 3.10+ (3.13.3 recommended per `pyproject.toml` (venv) and 3.12 per `environment.yml` (conda))
-- **GPU**: NVIDIA GPU with 8GB+ VRAM (tested on RTX 4070 and A5500 Laptop GPU)
+- **GPU**: NVIDIA GPU with 8GB+ VRAM (8 GB and 12 GB profiles included)
 - **CUDA**: 12.1+ (installed via conda)
 - **Operating System**: Windows, Linux, or macOS (Windows and Linux tested)
+
+### Docker Desktop on Windows with NVIDIA GPU
+
+Docker is an alternative to the native Conda workflow below. The container uses
+the same PyTorch 2.5.1 / CUDA 12.4 stack as the repository configuration while
+keeping its Linux dependencies separate from the exported Windows
+`requirements.txt`.
+
+#### Host prerequisites
+
+- Windows 10 or 11 with an NVIDIA GPU and a current NVIDIA Windows driver
+- Docker Desktop using the WSL2 backend and Linux containers
+- WSL 2.1.5 or newer with a current kernel (`wsl --update` from an elevated
+  PowerShell prompt)
+- Enough Docker/WSL storage for the image, Hugging Face cache, checkpoints, and
+  merged models. Allow at least 60 GB for one workflow or 100 GB when retaining
+  both hardware profiles and their checkpoints.
+
+Docker Desktop GPU support on Windows requires the WSL2 backend. See the
+[Docker Desktop GPU guide](https://docs.docker.com/desktop/features/gpu/) and
+[Compose GPU guide](https://docs.docker.com/compose/how-tos/gpu-support/).
+For best bind-mount performance, keep the checkout in the WSL Linux filesystem
+rather than under `/mnt/c`.
+
+#### Build and verify
+
+Run these commands from the repository root. Copying `.env.example` is optional
+unless the selected Hugging Face model requires a token.
+
+The examples use PowerShell. From a WSL shell, use `cp .env.example .env` and
+normal Bash line continuations instead.
+
+```powershell
+# Check WSL, RAM, default Docker disk, GPU/driver, Docker, and Linux mode.
+.\docker\Test-DockerDesktopHost.ps1 -Profile 12gb-safe
+
+Copy-Item .env.example .env
+docker compose build
+
+# Dependency-only check; this does not require a GPU.
+docker compose run --rm ai-factory-check
+
+# Required GPU passthrough, profile, storage, and SQLite checks.
+.\docker\Test-DockerDesktopHost.ps1 `
+  -Profile 12gb-safe `
+  -RunContainerCheck
+
+# Lightweight CLI smoke check.
+docker compose run --rm ai-factory python -m src.main --help
+```
+
+The GPU check should report PyTorch `2.5.1`, CUDA runtime `12.4`, and the NVIDIA
+device name with total/free VRAM. It does not download the model or start
+training. Close games, browsers using GPU acceleration, and other CUDA workloads
+if the preflight warns that less than 80% of VRAM is free.
+
+#### Select a hardware profile
+
+The image and Compose stack are shared; only the YAML profile changes. These are
+conservative starting points intended for validation before later throughput
+tuning:
+
+| Profile | Intended host | Model | Context | SFT micro-batch / accumulation | LoRA rank |
+|---|---|---|---:|---:|---:|
+| `8gb-safe` | 8 GB VRAM, approximately 32 GB RAM | `Qwen/Qwen3.5-4B` | 2,048 | 1 / 8 | 16 |
+| `12gb-safe` | 12 GB VRAM, at least 48 GB RAM | `Qwen/Qwen3.5-9B` | 2,048 | 1 / 8 | 32 |
+
+Both use NF4 double quantization, gradient checkpointing, DPO micro-batch 1,
+explicit SDPA, and separate output directories. The laptop profile deliberately
+uses the 4B model rather than forcing the 9B model into 8 GB; artifacts from the
+two base models are therefore not interchangeable.
+
+Run the laptop profile:
+
+```powershell
+docker compose run --rm ai-factory python docker/verify_runtime.py `
+  --require-gpu `
+  --profile 8gb-safe
+
+docker compose run --rm ai-factory python -m src.main `
+  --config-path src/config.8gb-safe.yaml
+```
+
+Run the RTX 4070 12 GB desktop profile:
+
+```powershell
+docker compose run --rm ai-factory python docker/verify_runtime.py `
+  --require-gpu `
+  --profile 12gb-safe
+
+docker compose run --rm ai-factory python -m src.main `
+  --config-path src/config.12gb-safe.yaml
+```
+
+`src/config.yaml` remains the manual/native baseline. The Model Optimizer is
+still available for custom hardware, but the named Docker profiles should be
+preferred when reproducible release behavior matters.
+
+The first model download is stored in the `huggingface-cache` Docker volume.
+Training artifacts are written to the host-visible `training_output/` directory,
+and `src/data/` is bind-mounted so generated or updated datasets persist. Agent
+file tools can read host-provided files from `agent_data/read/` but cannot modify
+that directory. Tool outputs persist in `agent_data/write/`, while application-
+owned task tracker state remains isolated in `agent_data/state/`.
+
+| Host or Docker storage | Container path | Purpose |
+|---|---|---|
+| `./training_output` | `/workspace/src/training_output` | Adapters, checkpoints, merged and DPO models |
+| `./src/data` | `/workspace/src/data` | Source, generated, and augmented datasets |
+| `./agent_data/read` | `/data/allowed/read` | Read-only inputs for the agent file tool |
+| `./agent_data/write` | `/data/allowed/write` | Agent-created files |
+| `./agent_data/state` | `/data/state` | Persistent `tasks.db`, inaccessible to `write_file` |
+| `huggingface-cache` volume | `/home/ai-factory/.cache/huggingface` | Downloaded model and tokenizer cache |
+
+SQLite is the only real database used by the repository; no separate database
+service is required. `task_tracker_tool` creates the database and `tasks` table
+on first use. The dependency preflight also performs a temporary SQLite
+transaction on the state mount and removes the probe database afterward.
+
+Useful maintenance commands:
+
+```powershell
+# Open an interactive shell with GPU access.
+docker compose run --rm ai-factory bash
+
+# Run the repository test suite without requiring GPU passthrough.
+docker compose run --rm ai-factory-check python -m pytest
+
+# Rebuild after dependency or Dockerfile changes.
+docker compose build --pull
+```
+
+The baseline image intentionally does not compile the optional `flash-attn`
+or Qwen3.5 linear-attention packages. The hardware profiles explicitly select
+SDPA and keep `use_linear_attention_kernels: false`, avoiding a hidden backend
+fallback or an untested native wheel dependency. Compose also sets
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce allocator
+fragmentation from variable-length batches.
+
+#### WSL memory for model merging
+
+The merge phase loads high-precision model weights on CPU. WSL normally allows
+the utility VM to grow to 50% of Windows RAM. On a 128 GB desktop, leave that
+default in place initially (approximately 64 GB); do not copy the laptop cap
+below onto that machine. See Microsoft's
+[WSL configuration reference](https://learn.microsoft.com/windows/wsl/wsl-config)
+for the current defaults and `.wslconfig` options.
+
+If merging on a 32 GB laptop is killed for memory pressure, a reasonable
+starting point is `%UserProfile%\.wslconfig` with:
+
+```ini
+[wsl2]
+memory=24GB
+swap=16GB
+```
+
+Apply changes with `wsl --shutdown`, then restart Docker Desktop. This is a host
+maximum rather than a repository setting. Adjust it only after observing memory
+pressure, and keep enough RAM available for Windows.
 
 ### Creating Conda/Miniconda Environment
 
@@ -764,6 +931,7 @@ Tool-augmented inference agent loop.
 **Security**:
 
 - File operations restricted to allowed paths (`AGENT_ALLOWED_READ_PATH`, `AGENT_ALLOWED_WRITE_PATH`)
+- Task storage can be relocated with `AGENT_TASK_DB_FILE` (Docker isolates it from model-controlled file writes)
 - Python REPL uses restricted globals
 - Calculation tool uses AST parsing (no code execution)
 
@@ -879,6 +1047,12 @@ pytest tests/test_train.py
 pytest -v
 ```
 
+**Run tests in the Docker image without requiring GPU passthrough**:
+
+```bash
+docker compose run --rm ai-factory-check python -m pytest
+```
+
 ### Test Structure
 
 Tests are organized in `tests/` directory:
@@ -890,6 +1064,7 @@ Tests are organized in `tests/` directory:
 - `test_inference_with_tools.py`: Inference and tool execution tests
 - `test_model_setup.py`: Model loading tests
 - `test_utils.py`: Utility function tests
+- `test_docker_assets.py`: Docker image, GPU, and persistent-mount contracts
 
 ### Test Markers
 
@@ -1248,5 +1423,5 @@ Distributed under the MIT License. See `LICENSE` for details.
 
 ---
 
-**Last Updated**: 08/02/2026
+**Last Updated**: 08/09/2026
 **Version**: 0.1.0 (per pyproject.toml)

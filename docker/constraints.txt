@@ -1,0 +1,5 @@
+# Keep the container on the repository's canonical PyTorch/CUDA-compatible stack.
+# The base image supplies these distributions; constraints prevent transitive upgrades.
+torch==2.5.1
+torchaudio==2.5.1
+torchvision==0.20.1

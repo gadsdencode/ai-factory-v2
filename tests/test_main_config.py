@@ -83,6 +83,32 @@ def test_load_config_from_yaml_resolves_relative_paths() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("profile_name", "model_name", "output_name"),
+    [
+        ("8gb-safe", "Qwen/Qwen3.5-4B", "8gb-safe"),
+        ("12gb-safe", "Qwen/Qwen3.5-9B", "12gb-safe"),
+    ],
+)
+def test_docker_hardware_profiles_load_and_isolate_outputs(
+    profile_name: str,
+    model_name: str,
+    output_name: str,
+) -> None:
+    """Named Docker profiles must validate and use distinct output paths."""
+    profile_path = _TESTS_DIR.parent / "src" / f"config.{profile_name}.yaml"
+
+    config = load_config_from_yaml(profile_path)
+
+    assert config.model.name == model_name
+    assert config.model.attn_implementation == "sdpa"
+    assert config.model.use_linear_attention_kernels is False
+    assert config.training.output_dir.name == output_name
+    assert config.dpo is not None
+    assert config.dpo.output_dir == config.training.output_dir
+
+
+@pytest.mark.unit
 def test_load_config_from_yaml_file_not_found(tmp_path: Path) -> None:
     """Missing config file raises FileNotFoundError."""
     missing = tmp_path / "nope.yaml"

@@ -1,0 +1,20 @@
+.git
+.cursor
+.env
+.env.*
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+venv
+
+# Host-only documentation and generated artifacts.
+docs
+agent_data
+training_output
+src/training_output
+**/checkpoint-*
+*.bin
+*.safetensors
