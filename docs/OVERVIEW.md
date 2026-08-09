@@ -38,7 +38,11 @@ The application is a **local LLM training and inference suite** that:
 3. **Runs DPO** (Direct Preference Optimization) on preference pairs derived from messages-format JSONL (often a separate Breaking Better file) to improve tool selection.
 4. **Optionally runs inference** with a tool-augmented agent loop using the best available model (DPO model preferred over merged model).
 
-The sample config ([`src/config.yaml`](../src/config.yaml)) defaults to `Qwen/Qwen3.5-9B` with `max_length: 4096`. Attention backends and optional Qwen linear-attention kernels are controlled under `model:` (see §8).
+The manual baseline ([`src/config.yaml`](../src/config.yaml)) defaults to
+`Qwen/Qwen3.5-9B` with `max_length: 4096`. Conservative Docker profiles use a
+4B model on 8 GB GPUs or a 9B model on 12 GB GPUs, both with 2,048-token context
+and explicit SDPA. Attention backends and optional Qwen linear-attention kernels
+are controlled under `model:` (see §8).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -286,6 +290,19 @@ Defined in `src/config.py` (Pydantic):
 
 Paths in YAML can be relative; they are resolved relative to the config file’s directory in `main.py` (`_resolve_config_paths`).
 
+### Docker hardware profiles
+
+The Docker image is shared by both named hardware profiles:
+
+| Config | Model | VRAM tier | SFT micro-batch / accumulation | Output directory |
+|---|---|---:|---:|---|
+| `src/config.8gb-safe.yaml` | `Qwen/Qwen3.5-4B` | 8 GB | 1 / 8 | `src/training_output/8gb-safe` |
+| `src/config.12gb-safe.yaml` | `Qwen/Qwen3.5-9B` | 12 GB | 1 / 8 | `src/training_output/12gb-safe` |
+
+Both profiles use NF4 double quantization, gradient checkpointing, explicit
+SDPA, DPO micro-batch 1, and PyTorch fallback linear attention. Their distinct
+base models and output directories prevent accidental artifact reuse.
+
 ### Attention and kernels
 
 - **Flash Attention 2:** default in schema; `load_model` verifies a real `flash_attn` import and falls back to SDPA if import fails or head dim &gt; 256.
@@ -314,6 +331,8 @@ See [`README.md`](../README.md) and [model_optimizer docs](codebase_docs/model_o
 | `src/main.py`                   | argparse CLI; load config; full pipeline (SFT → merge → DPO → optional inference). |
 | `src/config.py`                 | Pydantic config models (`ScriptConfig`, …). |
 | `src/config.yaml`               | Example YAML (`Qwen/Qwen3.5-9B`, ICDU + DPO messages paths). |
+| `src/config.8gb-safe.yaml`      | Conservative Docker profile for 8 GB GPUs (`Qwen3.5-4B`). |
+| `src/config.12gb-safe.yaml`     | Conservative Docker profile for 12 GB GPUs (`Qwen3.5-9B`). |
 | `src/data/`                     | ICDU load/format/collate; generation and augmentation scripts. |
 | `src/model_setup.py`            | Tokenizer/model load; BnB; attention resolution; linear-kernel validation. |
 | `src/train.py`                  | SFT with SFTTrainer; merge adapter into base. |

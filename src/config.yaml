@@ -1,6 +1,8 @@
 # ==============================================================================
 # Enhanced QLoRA and DPO Fine-Tuning Configuration
-# - Optimized for RTX 4070 (8GB VRAM, 32GB RAM) to prevent crashes.
+# - Manual baseline retained for native workflows and custom tuning.
+# - For conservative Docker defaults, use config.8gb-safe.yaml or
+#   config.12gb-safe.yaml instead.
 # - Supports ICDU-formatted datasets for the '3-3-3 Strategy' pipeline.
 # ==============================================================================
 

@@ -1,0 +1,80 @@
+# Conservative Docker profile for 8 GB NVIDIA GPUs and approximately 32 GB RAM.
+# Uses the 4B checkpoint so the full SFT -> merge -> DPO pipeline has headroom.
+
+data:
+  train_file: "./data/datasets/icdu_training_data_v8.jsonl"
+  validation_file: "./data/datasets/icdu_validation_data_v8.jsonl"
+
+model:
+  name: "Qwen/Qwen3.5-4B"
+  max_length: 2048
+  attn_implementation: "sdpa"
+  trust_remote_code: true
+  use_linear_attention_kernels: false
+
+quantization:
+  enabled: true
+  quant_type: "nf4"
+  use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+training:
+  output_dir: "./training_output/8gb-safe"
+  seed: 42
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  optim: "paged_adamw_8bit"
+  learning_rate: 0.0002
+  weight_decay: 0.001
+  max_grad_norm: 0.3
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  evaluation_strategy: "steps"
+  eval_steps: 150
+  save_strategy: "steps"
+  save_steps: 300
+  save_total_limit: 2
+  save_only_model: false
+  logging_steps: 10
+  group_by_length: true
+  gradient_checkpointing: true
+  report_to: "none"
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  remove_unused_columns: true
+  dataloader_num_workers: 1
+
+dpo:
+  train_file: "./data/datasets/augmented_datasets/breaking_better/bb_training_data_v7.jsonl"
+  output_dir: "./training_output/8gb-safe"
+  learning_rate: 0.000005
+  beta: 0.1
+  max_steps: 100
+  lora_rank: 16
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  optim: "paged_adamw_8bit"
+  lr_scheduler_type: "cosine"
+  eval_steps: 50
+  save_steps: 50
+  save_total_limit: 2
+  logging_steps: 10
+  gradient_checkpointing: true
+  warmup_ratio: 0.03
+  torch_compile: false

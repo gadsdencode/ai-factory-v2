@@ -15,6 +15,12 @@ from pathlib import Path
 
 EXPECTED_TORCH_VERSION = "2.5.1"
 EXPECTED_CUDA_VERSION = "12.4"
+BYTES_PER_GIBIBYTE = 1024**3
+FREE_VRAM_WARNING_RATIO = 0.8
+PROFILE_MINIMUM_VRAM_GIB = {
+    "8gb-safe": 7.5,
+    "12gb-safe": 11.5,
+}
 RUNTIME_PACKAGES = {
     "accelerate": "accelerate",
     "bitsandbytes": "bitsandbytes",
@@ -51,12 +57,40 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail when Docker has not exposed a CUDA-capable GPU.",
     )
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILE_MINIMUM_VRAM_GIB),
+        help=(
+            "Validate CUDA device 0 against a hardware profile. Selecting a "
+            "profile also requires GPU access."
+        ),
+    )
     return parser
 
 
 def _public_version(version: str) -> str:
     """Return a distribution version without its local build suffix."""
     return version.split("+", maxsplit=1)[0]
+
+
+def _to_gibibytes(byte_count: int) -> float:
+    """Convert a byte count to gibibytes."""
+    return byte_count / BYTES_PER_GIBIBYTE
+
+
+def _profile_vram_error(profile: str | None, total_vram_gib: float) -> str | None:
+    """Return an error when total VRAM is below a selected profile minimum."""
+    if profile is None:
+        return None
+
+    minimum_vram_gib = PROFILE_MINIMUM_VRAM_GIB[profile]
+    if total_vram_gib >= minimum_vram_gib:
+        return None
+
+    return (
+        f"Profile '{profile}' requires at least {minimum_vram_gib:.1f} GiB "
+        f"total VRAM on CUDA device 0; found {total_vram_gib:.1f} GiB."
+    )
 
 
 def _check_packages(require_gpu: bool) -> list[str]:
@@ -78,7 +112,7 @@ def _check_packages(require_gpu: bool) -> list[str]:
     return errors
 
 
-def _check_torch(require_gpu: bool) -> list[str]:
+def _check_torch(require_gpu: bool, profile: str | None = None) -> list[str]:
     """Validate the pinned PyTorch runtime and optional GPU requirement."""
     errors: list[str] = []
     try:
@@ -113,7 +147,27 @@ def _check_torch(require_gpu: bool) -> list[str]:
     if cuda_available:
         print(f"  GPU count: {torch.cuda.device_count()}")
         for device_index in range(torch.cuda.device_count()):
+            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+            free_vram_gib = _to_gibibytes(free_bytes)
+            total_vram_gib = _to_gibibytes(total_bytes)
             print(f"  GPU {device_index}: {torch.cuda.get_device_name(device_index)}")
+            print(
+                f"    VRAM: {free_vram_gib:.1f} GiB free / "
+                f"{total_vram_gib:.1f} GiB total"
+            )
+
+            if device_index == 0:
+                profile_error = _profile_vram_error(profile, total_vram_gib)
+                if profile_error is not None:
+                    errors.append(profile_error)
+                elif profile is not None:
+                    print(f"    Profile: {profile} (compatible)")
+
+            if free_vram_gib < total_vram_gib * FREE_VRAM_WARNING_RATIO:
+                print(
+                    "    WARNING: Less than 80% of VRAM is currently free. "
+                    "Close GPU-heavy applications before training."
+                )
     elif require_gpu:
         errors.append(
             "CUDA is unavailable. Confirm Docker Desktop uses the WSL2 backend "
@@ -126,12 +180,8 @@ def _check_torch(require_gpu: bool) -> list[str]:
 def _check_agent_storage() -> list[str]:
     """Verify agent directories and the persistent SQLite state mount."""
     errors: list[str] = []
-    read_path = Path(
-        os.environ.get("AGENT_ALLOWED_READ_PATH", "/data/allowed/read")
-    )
-    write_path = Path(
-        os.environ.get("AGENT_ALLOWED_WRITE_PATH", "/data/allowed/write")
-    )
+    read_path = Path(os.environ.get("AGENT_ALLOWED_READ_PATH", "/data/allowed/read"))
+    write_path = Path(os.environ.get("AGENT_ALLOWED_WRITE_PATH", "/data/allowed/write"))
     task_db_path = Path(os.environ.get("AGENT_TASK_DB_FILE", "tasks.db"))
     database_parent = task_db_path.parent
     if not task_db_path.is_absolute():
@@ -192,8 +242,9 @@ def _check_agent_storage() -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run dependency and GPU checks, returning a process exit code."""
     args = _build_parser().parse_args(argv)
-    errors = _check_packages(args.require_gpu)
-    errors.extend(_check_torch(args.require_gpu))
+    require_gpu = args.require_gpu or args.profile is not None
+    errors = _check_packages(require_gpu)
+    errors.extend(_check_torch(require_gpu, args.profile))
     errors.extend(_check_agent_storage())
 
     if errors:

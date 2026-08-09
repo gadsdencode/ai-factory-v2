@@ -53,6 +53,9 @@
 ai-factory/
 ├── src/
 │   ├── config.py              # <-- THIS MODULE
+│   ├── config.yaml            # Manual/native baseline
+│   ├── config.8gb-safe.yaml   # Conservative 4B / 8 GB Docker profile
+│   ├── config.12gb-safe.yaml  # Conservative 9B / 12 GB Docker profile
 │   ├── main.py                # Loads YAML → ScriptConfig, runs pipeline
 │   ├── train.py               # Uses config.training, config.lora, config.data
 │   ├── model_setup.py         # Uses config.model, config.quantization
@@ -383,6 +386,24 @@ model_config = ConfigDict(
 *   **`attn_implementation`:** Pydantic allows `eager` | `flash_attention_2` | `sdpa` | `None`. Runtime `load_model` also understands `flash_attention_3`. Prefer YAML values that validate.
 *   **Gemma 4:** Prefer `attn_implementation: sdpa`. The loader’s head-dim guard reads `head_dim` (or `hidden_size // num_attention_heads`), not `global_head_dim` (often 512 on Gemma 4 global layers; FA2 max is 256).
 *   **`use_linear_attention_kernels`:** When `true`, `validate_linear_attention_kernels` fail-fasts unless `causal_conv1d` and `fla` (flash-linear-attention) import. Used by SFT load, merge, DPO, and inference. Sample `src/config.yaml` sets this `false`.
+
+### Docker hardware profiles
+
+`src/config.8gb-safe.yaml` and `src/config.12gb-safe.yaml` are complete,
+independently loadable `ScriptConfig` documents. They intentionally duplicate
+the full schema so users can inspect or customize a run without an implicit
+merge layer.
+
+| Profile | Base model | Context | SFT batch / accumulation | LoRA rank | Workers |
+|---|---|---:|---:|---:|---:|
+| `8gb-safe` | `Qwen/Qwen3.5-4B` | 2,048 | 1 / 8 | 16 | 1 |
+| `12gb-safe` | `Qwen/Qwen3.5-9B` | 2,048 | 1 / 8 | 32 | 2 |
+
+Both select `sdpa`, NF4 double quantization, gradient checkpointing, DPO
+micro-batch 1, and `use_linear_attention_kernels: false`. Each writes to its own
+subdirectory under `src/training_output`, preventing cross-model checkpoints
+from being reused accidentally. Regression tests in `tests/test_docker_assets.py`
+lock the safety-sensitive differences.
 
 ### YAML Structure
 

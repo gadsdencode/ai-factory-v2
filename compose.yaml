@@ -17,6 +17,7 @@ x-ai-factory-common: &ai-factory-common
     AGENT_TASK_DB_FILE: /data/state/tasks.db
     HF_HOME: /home/ai-factory/.cache/huggingface
     HF_TOKEN: ${HF_TOKEN:-}
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
     TOKENIZERS_PARALLELISM: "false"
   volumes:
     - type: volume
