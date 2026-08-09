@@ -103,7 +103,7 @@ ai-factory/
 | `DEFAULT_MAX_NEW_TOKENS` | 512               | Default tokens for model generation            |
 | `DUCKDUCKGO_TIMEOUT`     | 10                | Timeout in seconds for DuckDuckGo requests     |
 | `MAX_SEARCH_RESULTS`     | 5                 | Max results returned from web search           |
-| `TASK_DB_FILE`           | `"tasks.db"`      | SQLite database file for task\_tracker\_tool   |
+| `TASK_DB_FILE`           | `AGENT_TASK_DB_FILE` or `"tasks.db"` | SQLite database file for task\_tracker\_tool |
 | `TOOL_RESULT_PREFIX`     | `"Tool results:"` | Prefix string for tool results in agent prompt |
 | `UNKNOWN_TOOL_MSG`       | `"Unknown tool"`  | Message for unregistered tool names            |
 
@@ -289,7 +289,7 @@ filepath: str
 | `transformers.AutoTokenizer`        | Tokenizer for model input/output                    | Loaded alongside model                          |
 | `torch`                             | Tensor operations, CUDA detection, no\_grad context | `torch.cuda.is_available()`for device selection |
 | `requests`                          | HTTP requests for DuckDuckGo search                 | 10s timeout, raises for status                  |
-| `sqlite3`                           | Local task database for task\_tracker\_tool         | Creates`tasks.db`file                           |
+| `sqlite3`                           | Local task database for task\_tracker\_tool         | Uses `AGENT_TASK_DB_FILE` or creates `tasks.db` |
 | `ast`                               | Safe math expression parsing                        | Only arithmetic nodes allowed                   |
 | `concurrent.futures`                | ThreadPoolExecutor for parallel tool execution      | max\_workers = number of tool calls             |
 | `functools.lru_cache`               | Result caching for idempotent tools                 | maxsize = CACHE\_SIZE (1000)                    |
@@ -337,6 +337,11 @@ calls = extract_tool_calls(model_output)
 | `MAX_FILE_SIZE`      | 1,000,000 (1MB)       | -                          | Maximum file size for read operations      |
 | `REPL_TIMEOUT`       | 5 seconds             | -                          | Timeout for REPL execution (reserved)      |
 | `REPL_MAX_MEMORY`    | 100MB                 | -                          | Memory limit for REPL execution (reserved) |
+
+The task tracker database path is configured separately by
+`AGENT_TASK_DB_FILE`; when unset, it retains the native `tasks.db` default.
+Docker Compose sets it to `/data/state/tasks.db`, which is on a persistent state
+mount that is outside the model-controlled file tool's allowed write path.
 
 
 ### Tool Caching Policy
@@ -470,7 +475,7 @@ flowchart TB
     REG --> CALC["calc_tool / _safe_calc"]
     REG --> REPL["python_repl"]
     REG --> FILEIO["read_file / write_file"]
-    REG --> TASKS["task_tracker_tool<br/>sqlite3 tasks.db"]
+    REG --> TASKS["task_tracker_tool<br/>SQLite task database"]
     REG --> STUBS["news, calendar, jobs,<br/>weather, animal database"]
 
     EXEC --> PROMPT["Append previous output + tool results<br/>then continue loop"]
@@ -605,4 +610,4 @@ The actual speedup depends on the GIL (for CPU-bound tools) and network latency 
 
 ***
 
-*Last updated: 2026-08-02.*
+*Last updated: 2026-08-09.*

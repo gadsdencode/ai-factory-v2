@@ -2,7 +2,12 @@
 
 This document describes how the **ai-factory** application works: its pipeline, data flow, components, and configuration.
 
-For run instructions and environment setup, see [`README.md`](../README.md) (Installation, Usage, Troubleshooting). On Windows, prefer the conda `ai-factory` stack (`conda run -n ai-factory ...`) and set `$env:KMP_DUPLICATE_LIB_OK = 'TRUE'` before training.
+For run instructions and environment setup, see [`README.md`](../README.md)
+(Installation, Usage, Troubleshooting). Native Windows runs use the conda
+`ai-factory` stack (`conda run -n ai-factory ...`) and set
+`$env:KMP_DUPLICATE_LIB_OK = 'TRUE'` before training. Docker Desktop runs use
+the WSL2/NVIDIA Compose workflow documented there; both paths retain the same
+PyTorch 2.5.1 / CUDA 12.4 contract.
 
 ---
 
@@ -336,4 +341,4 @@ Inference uses **dpo_model** if present, otherwise **final_merged_model**.
 
 ---
 
-*Last updated: 2026-08-02*
+*Last updated: 2026-08-09*

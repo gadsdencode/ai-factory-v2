@@ -1,0 +1,32 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Training and model artifacts
+training_output/*
+!training_output/.gitkeep
+src/training_output/
+**/checkpoint-*/
+*.bin
+*.safetensors
+
+# Tool caches
+.cache/
+
+# Agent file-tool inputs, outputs, and SQLite state
+agent_data/read/*
+!agent_data/read/.gitkeep
+agent_data/write/*
+!agent_data/write/.gitkeep
+agent_data/state/*
+!agent_data/state/.gitkeep

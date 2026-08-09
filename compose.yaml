@@ -1,0 +1,61 @@
+name: ai-factory
+
+x-ai-factory-common: &ai-factory-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      APP_GID: ${APP_GID:-1000}
+      APP_UID: ${APP_UID:-1000}
+  image: ai-factory:docker-desktop
+  init: true
+  working_dir: /workspace
+  shm_size: "8gb"
+  environment:
+    AGENT_ALLOWED_READ_PATH: /data/allowed/read
+    AGENT_ALLOWED_WRITE_PATH: /data/allowed/write
+    AGENT_TASK_DB_FILE: /data/state/tasks.db
+    HF_HOME: /home/ai-factory/.cache/huggingface
+    HF_TOKEN: ${HF_TOKEN:-}
+    TOKENIZERS_PARALLELISM: "false"
+  volumes:
+    - type: volume
+      source: huggingface-cache
+      target: /home/ai-factory/.cache/huggingface
+    - type: bind
+      source: ./src/data
+      target: /workspace/src/data
+    - type: bind
+      source: ./training_output
+      target: /workspace/src/training_output
+    - type: bind
+      source: ./agent_data/read
+      target: /data/allowed/read
+      read_only: true
+    - type: bind
+      source: ./agent_data/write
+      target: /data/allowed/write
+    - type: bind
+      source: ./agent_data/state
+      target: /data/state
+
+services:
+  ai-factory:
+    <<: *ai-factory-common
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ai-factory-check:
+    <<: *ai-factory-common
+    profiles: [checks]
+    command: ["python", "docker/verify_runtime.py"]
+
+volumes:
+  huggingface-cache:

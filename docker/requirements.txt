@@ -1,0 +1,30 @@
+# Portable Linux dependencies for the Docker image. The root requirements.txt is
+# an exported Windows/Conda environment and intentionally remains unchanged.
+accelerate>=1.12.0
+bitsandbytes==0.49.2
+datasets>=4.5.0
+einops
+huggingface-hub>=1.4.0
+matplotlib==3.10.8
+numpy==2.2.6
+peft>=0.18.0
+psutil
+pyarrow==23.0.1
+pydantic>=2.0,<3
+PyYAML
+requests
+safetensors>=0.7.0
+scikit-learn==1.7.2
+scipy==1.15.2
+tiktoken==0.12.0
+tqdm
+transformers>=5.1.0,<6
+trl>=0.27.0
+typer==0.24.0
+
+# Keep the repository's test workflow available inside the same image.
+pytest
+pytest-mock
+
+# flash-attn is deliberately omitted. src/model_setup.py already falls back to
+# SDPA when the optional native package is not importable.

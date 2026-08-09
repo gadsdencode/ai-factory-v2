@@ -63,9 +63,14 @@ ai-factory/
 │   │   └── ...
 │   └── upload/
 │       └── upload_to_hf.py    # Hugging Face model upload
+├── docker/                    # Portable dependencies + runtime verification
 ├── tests/                     # Test suite
-├── data/                      # Training/validation data (JSONL)
-└── requirements.txt           # Python dependencies
+├── agent_data/                # Persistent, restricted inference-tool files
+├── training_output/           # Host-visible Docker training artifacts
+├── Dockerfile                 # PyTorch 2.5.1 / CUDA 12.4 image
+├── compose.yaml               # Docker Desktop GPU and persistent storage
+├── environment.yml            # Canonical Conda environment
+└── requirements.txt           # Exported native Windows environment
 ```
 
 ### Pipeline Flow
@@ -86,6 +91,122 @@ ai-factory/
 - **GPU**: NVIDIA GPU with 8GB+ VRAM (tested on RTX 4070 and A5500 Laptop GPU)
 - **CUDA**: 12.1+ (installed via conda)
 - **Operating System**: Windows, Linux, or macOS (Windows and Linux tested)
+
+### Docker Desktop on Windows with NVIDIA GPU
+
+Docker is an alternative to the native Conda workflow below. The container uses
+the same PyTorch 2.5.1 / CUDA 12.4 stack as the repository configuration while
+keeping its Linux dependencies separate from the exported Windows
+`requirements.txt`.
+
+#### Host prerequisites
+
+- Windows 10 or 11 with an NVIDIA GPU and a current NVIDIA Windows driver
+- Docker Desktop using the WSL2 backend and Linux containers
+- A current WSL kernel (`wsl --update` from an elevated PowerShell prompt)
+- Enough Docker/WSL storage for the image, Hugging Face cache, checkpoints, and
+  merged models; 60 GB or more free is recommended for the default 9B workflow
+
+Docker Desktop GPU support on Windows requires the WSL2 backend. See the
+[Docker Desktop GPU guide](https://docs.docker.com/desktop/features/gpu/) and
+[Compose GPU guide](https://docs.docker.com/compose/how-tos/gpu-support/).
+For best bind-mount performance, keep the checkout in the WSL Linux filesystem
+rather than under `/mnt/c`.
+
+#### Build and verify
+
+Run these commands from the repository root. Copying `.env.example` is optional
+unless the selected Hugging Face model requires a token.
+
+The examples use PowerShell. From a WSL shell, use `cp .env.example .env` and
+normal Bash line continuations instead.
+
+```powershell
+Copy-Item .env.example .env
+docker compose build
+
+# Dependency-only check; this does not require a GPU.
+docker compose run --rm ai-factory-check
+
+# Required GPU passthrough check.
+docker compose run --rm ai-factory python docker/verify_runtime.py --require-gpu
+
+# Lightweight CLI smoke check.
+docker compose run --rm ai-factory python -m src.main --help
+```
+
+The GPU check should report PyTorch `2.5.1`, CUDA runtime `12.4`, and the NVIDIA
+device name. It does not download the model or start training.
+
+#### Review an 8 GB GPU configuration before training
+
+The sample config remains unchanged. On an RTX 4070 or another 8 GB GPU,
+generate a low-memory proposal inside the persistent output directory, then
+review `training_output/config.docker.yaml` on the host before running it:
+
+```powershell
+docker compose run --rm ai-factory python -m src.main optimize-config `
+  --config-path src/config.yaml `
+  --preset low_memory `
+  --output src/training_output/config.docker.yaml
+
+docker compose run --rm ai-factory python -m src.main `
+  --config-path src/training_output/config.docker.yaml
+```
+
+The first model download is stored in the `huggingface-cache` Docker volume.
+Training artifacts are written to the host-visible `training_output/` directory,
+and `src/data/` is bind-mounted so generated or updated datasets persist. Agent
+file tools can read host-provided files from `agent_data/read/` but cannot modify
+that directory. Tool outputs persist in `agent_data/write/`, while application-
+owned task tracker state remains isolated in `agent_data/state/`.
+
+| Host or Docker storage | Container path | Purpose |
+|---|---|---|
+| `./training_output` | `/workspace/src/training_output` | Adapters, checkpoints, merged and DPO models |
+| `./src/data` | `/workspace/src/data` | Source, generated, and augmented datasets |
+| `./agent_data/read` | `/data/allowed/read` | Read-only inputs for the agent file tool |
+| `./agent_data/write` | `/data/allowed/write` | Agent-created files |
+| `./agent_data/state` | `/data/state` | Persistent `tasks.db`, inaccessible to `write_file` |
+| `huggingface-cache` volume | `/home/ai-factory/.cache/huggingface` | Downloaded model and tokenizer cache |
+
+SQLite is the only real database used by the repository; no separate database
+service is required. `task_tracker_tool` creates the database and `tasks` table
+on first use. The dependency preflight also performs a temporary SQLite
+transaction on the state mount and removes the probe database afterward.
+
+Useful maintenance commands:
+
+```powershell
+# Open an interactive shell with GPU access.
+docker compose run --rm ai-factory bash
+
+# Run the repository test suite without requiring GPU passthrough.
+docker compose run --rm ai-factory-check python -m pytest
+
+# Rebuild after dependency or Dockerfile changes.
+docker compose build --pull
+```
+
+The baseline image intentionally does not compile the optional `flash-attn`
+package. When `flash_attention_2` is requested, `src/model_setup.py` performs its
+existing import check and falls back to SDPA. The Qwen3.5 linear-attention flag
+also remains `false`, preserving the repository's PyTorch fallback behavior.
+
+#### WSL memory for model merging
+
+The merge phase loads high-precision model weights on CPU and can exceed WSL's
+default memory allowance. On a 32 GB machine, a reasonable starting point is
+`%UserProfile%\.wslconfig` with:
+
+```ini
+[wsl2]
+memory=24GB
+swap=16GB
+```
+
+Apply changes with `wsl --shutdown`, then restart Docker Desktop. Adjust these
+values for the host rather than copying them unchanged onto a smaller machine.
 
 ### Creating Conda/Miniconda Environment
 
@@ -764,6 +885,7 @@ Tool-augmented inference agent loop.
 **Security**:
 
 - File operations restricted to allowed paths (`AGENT_ALLOWED_READ_PATH`, `AGENT_ALLOWED_WRITE_PATH`)
+- Task storage can be relocated with `AGENT_TASK_DB_FILE` (Docker isolates it from model-controlled file writes)
 - Python REPL uses restricted globals
 - Calculation tool uses AST parsing (no code execution)
 
@@ -879,6 +1001,12 @@ pytest tests/test_train.py
 pytest -v
 ```
 
+**Run tests in the Docker image without requiring GPU passthrough**:
+
+```bash
+docker compose run --rm ai-factory-check python -m pytest
+```
+
 ### Test Structure
 
 Tests are organized in `tests/` directory:
@@ -890,6 +1018,7 @@ Tests are organized in `tests/` directory:
 - `test_inference_with_tools.py`: Inference and tool execution tests
 - `test_model_setup.py`: Model loading tests
 - `test_utils.py`: Utility function tests
+- `test_docker_assets.py`: Docker image, GPU, and persistent-mount contracts
 
 ### Test Markers
 
@@ -1248,5 +1377,5 @@ Distributed under the MIT License. See `LICENSE` for details.
 
 ---
 
-**Last Updated**: 08/02/2026
+**Last Updated**: 08/09/2026
 **Version**: 0.1.0 (per pyproject.toml)
